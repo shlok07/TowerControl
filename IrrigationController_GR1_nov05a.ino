@@ -1,5 +1,4 @@
 #include "arduino_secrets.h"
-#include "arduino_secrets.h"
 #include <Arduino.h>
 #include <SPI.h>
 #include <Ethernet.h>
@@ -641,6 +640,17 @@ inline void fireValve(DigitalMechExpansion& exp, uint8_t ch, unsigned long now) 
   firedThisAssert[ch] = true;
   ignoreUntilMs[ch]   = now + IGNORE_MS;
   exp.updateDigitalOutputs();
+
+  // If we just hit the max valve opens threshold, automatically
+  // turn irrigation OFF so the dashboard toggle follows suit.
+  if (ch < NUM_TOWERS &&
+      towerIrrCount[ch] >= MAX_VALVE_OPENS_PER_TOWER) {
+    Serial.print(F("Tower "));
+    Serial.print(ch + 1);
+    Serial.println(F(" reached max valve activations; disabling irrigation."));
+    irrigationEnable          = false;
+    irrigationEnabledInternal = false;
+  }
 }
 
 // Publish irrigation + heartbeat to Cloud
@@ -1171,8 +1181,8 @@ void setup() {
 
   // Reset tray counts at boot
   for (uint8_t i = 0; i < NUM_TOWERS; i++) {
-  towerTrayCount[i] = 0;
-  towerIrrCount[i]  = 0;
+    towerTrayCount[i] = 0;
+    towerIrrCount[i]  = 0;
   }
 
   // Set default tower interval from fixed 18 Hz (overwritten later by VFD feedback)
