@@ -1,0 +1,26 @@
+{
+  "cpu": {
+    "fqbn": "arduino:mbed_opta:opta",
+    "name": "",
+    "type": "serial"
+  },
+  "secrets": [
+    {
+      "name": "SECRET_OPTIONAL_DNS",
+      "value": ""
+    },
+    {
+      "name": "SECRET_OPTIONAL_GATEWAY",
+      "value": ""
+    },
+    {
+      "name": "SECRET_OPTIONAL_IP",
+      "value": ""
+    },
+    {
+      "name": "SECRET_OPTIONAL_NETMASK",
+      "value": ""
+    }
+  ],
+  "included_libs": []
+}
