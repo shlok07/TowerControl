@@ -1,5 +1,4 @@
 #include "arduino_secrets.h"
-#include "arduino_secrets.h"
 #include <Arduino.h>
 #include <SPI.h>
 #include <Ethernet.h>
@@ -19,19 +18,19 @@ using namespace Opta;
 // ======================================================================
 
 #ifndef SMTP_SERVER
-#define SMTP_SERVER "mail.smtp2go.com"
+#define SMTP_SERVER SECRET_SMTP_SERVER
 #endif
 
 #ifndef SMTP_PORT
-#define SMTP_PORT 2525
+#define SMTP_PORT SECRET_SMTP_PORT
 #endif
 
 #ifndef SMTP_USERNAME
-#define SMTP_USERNAME "shlok@grohere.com"
+#define SMTP_USERNAME SECRET_SMTP_USERNAME
 #endif
 
 #ifndef SMTP_PASSWORD
-#define SMTP_PASSWORD "Strawberries2025$$"
+#define SMTP_PASSWORD SECRET_SMTP_PASSWORD
 #endif
 
 #ifndef SMTP_USE_TLS
@@ -39,27 +38,27 @@ using namespace Opta;
 #endif
 
 #ifndef FAULT_EMAIL_FROM_NAME
-#define FAULT_EMAIL_FROM_NAME "Tower Controller"
+#define FAULT_EMAIL_FROM_NAME SECRET_FAULT_EMAIL_FROM_NAME
 #endif
 
 #ifndef FAULT_EMAIL_FROM_ADDR
-#define FAULT_EMAIL_FROM_ADDR "shlok@grohere.com"
+#define FAULT_EMAIL_FROM_ADDR SECRET_FAULT_EMAIL_FROM_ADDR
 #endif
 
 #ifndef FAULT_EMAIL_RECIPIENT_1_NAME
-#define FAULT_EMAIL_RECIPIENT_1_NAME "Shlok"
+#define FAULT_EMAIL_RECIPIENT_1_NAME SECRET_FAULT_EMAIL_RECIPIENT_1_NAME
 #endif
 
 #ifndef FAULT_EMAIL_RECIPIENT_1_ADDR
-#define FAULT_EMAIL_RECIPIENT_1_ADDR "shlok@grohere.com"
+#define FAULT_EMAIL_RECIPIENT_1_ADDR SECRET_FAULT_EMAIL_RECIPIENT_1_ADDR
 #endif
 
 #ifndef FAULT_EMAIL_RECIPIENT_2_NAME
-#define FAULT_EMAIL_RECIPIENT_2_NAME ""
+#define FAULT_EMAIL_RECIPIENT_2_NAME SECRET_FAULT_EMAIL_RECIPIENT_2_NAME
 #endif
 
 #ifndef FAULT_EMAIL_RECIPIENT_2_ADDR
-#define FAULT_EMAIL_RECIPIENT_2_ADDR ""
+#define FAULT_EMAIL_RECIPIENT_2_ADDR SECRET_FAULT_EMAIL_RECIPIENT_2_ADDR
 #endif
 
 #ifndef FAULT_EMAIL_RETRY_INTERVAL_MS
@@ -1335,6 +1334,18 @@ void loop() {
   // Towers (exp0): reed / fault logic
   for (uint8_t i = 0; i < NUM_TOWERS; i++) {
     readReedAndUpdate(i, nowMs);
+  }
+
+  // Retry fault emails while a tower remains faulted
+  for (uint8_t i = 0; i < NUM_TOWERS; ++i) {
+    Tower &t = towers[i];
+    if (!t.fault || t.faultEmailSent || t.bypassLine) continue;
+
+    unsigned long lastAttempt = t.lastFaultEmailAttempt;
+    if (lastAttempt == 0 || (nowMs - lastAttempt) >= FAULT_EMAIL_RETRY_INTERVAL_MS) {
+      bool firstAttempt = (lastAttempt == 0);
+      notifyTowerFault(i, firstAttempt, nowMs);
+    }
   }
 
     // Tower run control – no time-of-day schedule, just fault + bypass
