@@ -235,10 +235,40 @@ static bool sendTowerFaultEmail(const String& subject, const String& body) {
 
   EthernetClient client;
   Serial.print(F("Connecting to SMTP server "));
+  String smtpPortStr = String(SMTP_PORT);
+  smtpPortStr.trim();
+  if (smtpPortStr.isEmpty()) {
+    Serial.println(F("(invalid SMTP_PORT value)"));
+    Serial.println(F("SMTP_PORT is empty after trimming."));
+    return false;
+  }
+
+  bool portIsNumeric = true;
+  for (size_t i = 0; i < smtpPortStr.length(); ++i) {
+    if (!isDigit(smtpPortStr.charAt(i))) {
+      portIsNumeric = false;
+      break;
+    }
+  }
+
+  if (!portIsNumeric) {
+    Serial.println(F("(invalid SMTP_PORT value)"));
+    Serial.println(F("SMTP_PORT must contain only digits."));
+    return false;
+  }
+
+  long parsedPort = smtpPortStr.toInt();
+  if (parsedPort <= 0 || parsedPort > 65535) {
+    Serial.println(F("(invalid SMTP_PORT value)"));
+    Serial.println(F("SMTP_PORT must be between 1 and 65535."));
+    return false;
+  }
+
+  const uint16_t smtpPort = static_cast<uint16_t>(parsedPort);
   Serial.print(SMTP_SERVER);
   Serial.print(F(":"));
-  Serial.println(SMTP_PORT);
-  if (!client.connect(SMTP_SERVER, SMTP_PORT)) {
+  Serial.println(smtpPort);
+  if (!client.connect(SMTP_SERVER, smtpPort)) {
     Serial.println(F("Unable to connect to SMTP server."));
     return false;
   }
