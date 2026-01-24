@@ -199,6 +199,15 @@ unsigned int  towerIrrCount[NUM_TOWERS];
 // 16 trays + 1 safety pass
 const uint8_t MAX_VALVE_OPENS_PER_TOWER = 17;
 
+// Irrigation monitoring state (must be declared before functions that use them)
+bool           irrigationWasJustStarted = false;
+unsigned long  irrigationStartMs        = 0;
+unsigned long  towerTrayCountAtStart[NUM_TOWERS];
+bool           towerIrrCheckEmailSent[NUM_TOWERS];
+bool           irrigationCompleteEmailSent = false;
+const unsigned long IRR_CHECK_DELAY_MS = 120000UL;  // 2 minutes to check if trays are moving
+const unsigned long IRR_SAFETY_CHECK_MS = 180000UL; // 3 minutes for safety check (tray stuck at 0)
+
 
 // ----------------------------------------------------------------------
 // Tower fault email
@@ -788,15 +797,6 @@ unsigned long  deltaSecArr[NUM_CH];
 bool           firedThisAssert[NUM_CH];
 // NEW: internal "real" enable flag
 bool           irrigationEnabledInternal = true;
-
-// Irrigation monitoring state
-bool           irrigationWasJustStarted = false;
-unsigned long  irrigationStartMs        = 0;
-unsigned long  towerTrayCountAtStart[NUM_TOWERS];
-bool           towerIrrCheckEmailSent[NUM_TOWERS];
-bool           irrigationCompleteEmailSent = false;
-const unsigned long IRR_CHECK_DELAY_MS = 120000UL;  // 2 minutes to check if trays are moving
-const unsigned long IRR_SAFETY_CHECK_MS = 180000UL; // 3 minutes for safety check (tray stuck at 0)
 
 // Outage tracking for Cloud
 bool          wasCloudConnected = false;
