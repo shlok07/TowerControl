@@ -469,13 +469,14 @@ static void monitorIrrigationProgress(unsigned long nowMs) {
 static bool isIrrigationComplete() {
   if (!irrigationEnabledInternal) return false;
 
-  // Check if all towers have reached max valve opens or are in bypass
+  // Check if all towers have reached 16 tray count or are in bypass
   for (uint8_t i = 0; i < NUM_TOWERS; ++i) {
     // Skip towers in bypass mode
     if (towers[i].bypassLine) continue;
 
-    // If any tower hasn't reached max, irrigation is not complete
-    if (towerIrrCount[i] < MAX_VALVE_OPENS_PER_TOWER) {
+    // Check if this tower has completed 16 trays since irrigation started
+    unsigned long trayIncrease = towerTrayCount[i] - towerTrayCountAtStart[i];
+    if (trayIncrease < 16) {
       return false;
     }
   }
@@ -808,10 +809,10 @@ inline void fireValve(DigitalMechExpansion& exp, uint8_t ch, unsigned long now) 
   // Map irrigation channel → tower index
   // Assumes: channel 0 → tower 0, channel 1 → tower 1, etc.
   if (ch < NUM_TOWERS) {
-    // If this tower has already had its valve opened
-    // MAX_VALVE_OPENS_PER_TOWER times in this run, do not irrigate again.
-    if (towerIrrCount[ch] >= MAX_VALVE_OPENS_PER_TOWER) {
-      return;  // irrigation for this tower is effectively "off"
+    // Check if this tower has completed 16 tray counts
+    unsigned long trayIncrease = towerTrayCount[ch] - towerTrayCountAtStart[ch];
+    if (trayIncrease >= 16) {
+      return;  // irrigation for this tower is complete
     }
     towerIrrCount[ch]++;  // count this valve-on event
   }
@@ -822,17 +823,6 @@ inline void fireValve(DigitalMechExpansion& exp, uint8_t ch, unsigned long now) 
   firedThisAssert[ch] = true;
   ignoreUntilMs[ch]   = now + IGNORE_MS;
   exp.updateDigitalOutputs();
-
-  // If we just hit the max valve opens threshold, automatically
-  // turn irrigation OFF so the dashboard toggle follows suit.
-  if (ch < NUM_TOWERS &&
-      towerIrrCount[ch] >= MAX_VALVE_OPENS_PER_TOWER) {
-    Serial.print(F("Tower "));
-    Serial.print(ch + 1);
-    Serial.println(F(" reached max valve activations; disabling irrigation."));
-    irrigationEnable          = false;
-    irrigationEnabledInternal = false;
-  }
 }
 
 // Publish irrigation + heartbeat to Cloud
@@ -968,48 +958,56 @@ void publishTowersToCloud(unsigned long nowMs) {
   tower0LastEdgeMin     = edgeMin(0);
   tower0LastIntervalMin = intervalMin(0);
   tower0Bypass          = towers[0].bypassLine;
+  tower0TrayCount       = (int)towerTrayCount[0];
 
   tower1Running         = towers[1].contactorOn;
   tower1Fault           = towers[1].fault;
   tower1LastEdgeMin     = edgeMin(1);
   tower1LastIntervalMin = intervalMin(1);
   tower1Bypass          = towers[1].bypassLine;
+  tower1TrayCount       = (int)towerTrayCount[1];
 
   tower2Running         = towers[2].contactorOn;
   tower2Fault           = towers[2].fault;
   tower2LastEdgeMin     = edgeMin(2);
   tower2LastIntervalMin = intervalMin(2);
   tower2Bypass          = towers[2].bypassLine;
+  tower2TrayCount       = (int)towerTrayCount[2];
 
   tower3Running         = towers[3].contactorOn;
   tower3Fault           = towers[3].fault;
   tower3LastEdgeMin     = edgeMin(3);
   tower3LastIntervalMin = intervalMin(3);
   tower3Bypass          = towers[3].bypassLine;
+  tower3TrayCount       = (int)towerTrayCount[3];
 
   tower4Running         = towers[4].contactorOn;
   tower4Fault           = towers[4].fault;
   tower4LastEdgeMin     = edgeMin(4);
   tower4LastIntervalMin = intervalMin(4);
   tower4Bypass          = towers[4].bypassLine;
+  tower4TrayCount       = (int)towerTrayCount[4];
 
   tower5Running         = towers[5].contactorOn;
   tower5Fault           = towers[5].fault;
   tower5LastEdgeMin     = edgeMin(5);
   tower5LastIntervalMin = intervalMin(5);
   tower5Bypass          = towers[5].bypassLine;
+  tower5TrayCount       = (int)towerTrayCount[5];
 
   tower6Running         = towers[6].contactorOn;
   tower6Fault           = towers[6].fault;
   tower6LastEdgeMin     = edgeMin(6);
   tower6LastIntervalMin = intervalMin(6);
   tower6Bypass          = towers[6].bypassLine;
+  tower6TrayCount       = (int)towerTrayCount[6];
 
   tower7Running         = towers[7].contactorOn;
   tower7Fault           = towers[7].fault;
   tower7LastEdgeMin     = edgeMin(7);
   tower7LastIntervalMin = intervalMin(7);
   tower7Bypass          = towers[7].bypassLine;
+  tower7TrayCount       = (int)towerTrayCount[7];
 
   nextPublish = nowMs + 10000UL;
 }
@@ -1306,7 +1304,6 @@ void setup() {
   networkLossCount = 0;
   powerLossCount   = 0;
   pulseSeconds     = 40;   // default 40 s
-  irrigationEnable = true;
 
   tower0LastEdgeMin = tower0LastIntervalMin =
   tower1LastEdgeMin = tower1LastIntervalMin =
@@ -1322,8 +1319,6 @@ void setup() {
   vfd1AlarmCode = vfd1StatusWord = vfd2AlarmCode = vfd2StatusWord = 0;
   inState0 = inState1 = inState2 = inState3 =
   inState4 = inState5 = inState6 = inState7 = false;
-  irrigationEnable = true;
-    irrigationEnabledInternal = irrigationEnable;
   outState0 = outState1 = outState2 = outState3 =
   outState4 = outState5 = outState6 = outState7 = false;
   tower0Bypass = tower1Bypass = tower2Bypass = tower3Bypass =
@@ -1338,6 +1333,11 @@ void setup() {
   // Cloud / network
   initProperties();
   ArduinoCloud.begin(ArduinoIoTPreferredConnection);
+
+  // Initialize irrigation state from cloud value
+  // The cloud will sync and call onIrrigationEnableChange() which will update irrigationEnabledInternal
+  // But for now, default to false until cloud syncs
+  irrigationEnabledInternal = false;
 
   PULSE_ON_MS   = (unsigned long)pulseSeconds * 1000UL;
   lastDayIndex  = dayIndexNow();
