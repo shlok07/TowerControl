@@ -375,6 +375,150 @@ static bool sendTowerFaultEmail(const String& subject, const String& body) {
   return true;
 }
 
+// Send irrigation notification email
+static bool sendIrrigationEmail(const String& subject, const String& body) {
+  // Reuse the same SMTP logic as tower fault emails
+  return sendTowerFaultEmail(subject, body);
+}
+
+// Monitor irrigation progress and send notifications
+static void monitorIrrigationProgress(unsigned long nowMs) {
+  if (!irrigationEnabledInternal || !irrigationWasJustStarted) {
+    return;
+  }
+
+  unsigned long elapsed = nowMs - irrigationStartMs;
+
+  // After IRR_CHECK_DELAY_MS, check if tray counts have increased
+  if (elapsed >= IRR_CHECK_DELAY_MS) {
+    for (uint8_t i = 0; i < NUM_TOWERS; ++i) {
+      // Skip if already sent email for this tower
+      if (towerIrrCheckEmailSent[i]) continue;
+
+      // Skip if tower is in bypass mode
+      if (towers[i].bypassLine) continue;
+
+      // Check if tray count hasn't increased
+      if (towerTrayCount[i] <= towerTrayCountAtStart[i]) {
+        String subject = String("Tower ") + (i + 1) + String(" irrigation not working");
+        String body;
+        body.reserve(256);
+        body += String("Tower ") + (i + 1) + String(" irrigation appears to be not working.\r\n");
+        body += String("Tray count at start: ") + String(towerTrayCountAtStart[i]) + String("\r\n");
+        body += String("Current tray count: ") + String(towerTrayCount[i]) + String("\r\n");
+        body += String("Time since irrigation started: ") + String(elapsed / 1000UL) + String(" seconds\r\n\r\n");
+        body += String("Please check the tower and verify irrigation is functioning correctly.\r\n");
+
+        bool sent = sendIrrigationEmail(subject, body);
+        if (sent) {
+          towerIrrCheckEmailSent[i] = true;
+          Serial.print(F("[IRRIGATION] Sent warning email for Tower "));
+          Serial.println(i + 1);
+        }
+      }
+    }
+  }
+
+  // Safety check: if tray count stuck at 0 for IRR_SAFETY_CHECK_MS, put tower in fault
+  if (elapsed >= IRR_SAFETY_CHECK_MS) {
+    for (uint8_t i = 0; i < NUM_TOWERS; ++i) {
+      // Skip if tower is in bypass or already in fault
+      if (towers[i].bypassLine || towers[i].fault) continue;
+
+      // If tray count is still 0 after safety check period, put in fault mode
+      if (towerTrayCountAtStart[i] == 0 && towerTrayCount[i] == 0) {
+        Serial.print(F("[SAFETY] Tower "));
+        Serial.print(i + 1);
+        Serial.println(F(" tray count stuck at 0 - entering fault mode"));
+
+        towers[i].fault = true;
+        towers[i].faultCommandedOn = towers[i].contactorOn;
+        towers[i].faultExpectedIntervalMs = towers[i].interval_ms;
+        towers[i].faultTriggeredMs = nowMs;
+        towers[i].faultEmailSent = false;
+        towers[i].lastFaultEmailAttempt = 0;
+        towers[i].contactorOn = false;
+        if (!towers[i].bypassLine) setRelayChan(towers[i].out, false);
+
+        String subject = String("SAFETY FAULT: Tower ") + (i + 1) + String(" tray count stuck at 0");
+        String body;
+        body.reserve(256);
+        body += String("SAFETY ALERT: Tower ") + (i + 1) + String(" has entered fault mode.\r\n\r\n");
+        body += String("Reason: Tray count remained at 0 for ") + String(IRR_SAFETY_CHECK_MS / 1000UL) + String(" seconds during irrigation.\r\n");
+        body += String("This indicates the tray may not be moving or the sensor is not functioning.\r\n\r\n");
+        body += String("The tower has been automatically shut down for safety.\r\n");
+        body += String("Please inspect the tower and acknowledge the fault to restart.\r\n");
+
+        sendIrrigationEmail(subject, body);
+      }
+    }
+  }
+}
+
+// Check if irrigation is complete
+static bool isIrrigationComplete() {
+  if (!irrigationEnabledInternal) return false;
+
+  // Check if all towers have reached max valve opens or are in bypass
+  for (uint8_t i = 0; i < NUM_TOWERS; ++i) {
+    // Skip towers in bypass mode
+    if (towers[i].bypassLine) continue;
+
+    // If any tower hasn't reached max, irrigation is not complete
+    if (towerIrrCount[i] < MAX_VALVE_OPENS_PER_TOWER) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+// Handle irrigation completion
+static void handleIrrigationCompletion(unsigned long nowMs) {
+  if (!irrigationEnabledInternal) return;
+
+  if (isIrrigationComplete() && !irrigationCompleteEmailSent) {
+    unsigned long durationSec = (nowMs - irrigationStartMs) / 1000UL;
+
+    Serial.println(F("[IRRIGATION] Complete - sending notification and turning off"));
+
+    // Send completion email
+    String subject = String("Irrigation cycle completed");
+    String body;
+    body.reserve(512);
+    body += String("Irrigation cycle has completed successfully.\r\n\r\n");
+    body += String("Duration: ") + String(durationSec / 60UL) + String(" minutes\r\n\r\n");
+    body += String("Tower valve activation counts:\r\n");
+
+    for (uint8_t i = 0; i < NUM_TOWERS; ++i) {
+      body += String("  Tower ") + (i + 1) + String(": ");
+      if (towers[i].bypassLine) {
+        body += String("BYPASSED\r\n");
+      } else {
+        body += String(towerIrrCount[i]) + String(" activations\r\n");
+      }
+    }
+
+    body += String("\r\nTray counts during irrigation:\r\n");
+    for (uint8_t i = 0; i < NUM_TOWERS; ++i) {
+      if (!towers[i].bypassLine) {
+        unsigned long trayIncrease = towerTrayCount[i] - towerTrayCountAtStart[i];
+        body += String("  Tower ") + (i + 1) + String(": +") + String(trayIncrease) + String(" trays\r\n");
+      }
+    }
+
+    bool sent = sendIrrigationEmail(subject, body);
+    if (sent) {
+      irrigationCompleteEmailSent = true;
+    }
+
+    // Turn off irrigation toggle
+    irrigationEnable = false;
+    irrigationEnabledInternal = false;
+    irrigationWasJustStarted = false;
+  }
+}
+
 static void notifyTowerFault(uint8_t idx, bool firstAttempt, unsigned long nowMs) {
   if (idx >= NUM_TOWERS) return;
   Tower &t = towers[idx];
@@ -642,8 +786,17 @@ unsigned long  prevTrigMsArr[NUM_CH];
 unsigned long  deltaSecArr[NUM_CH];
 
 bool           firedThisAssert[NUM_CH];
-// NEW: internal “real” enable flag
+// NEW: internal "real" enable flag
 bool           irrigationEnabledInternal = true;
+
+// Irrigation monitoring state
+bool           irrigationWasJustStarted = false;
+unsigned long  irrigationStartMs        = 0;
+unsigned long  towerTrayCountAtStart[NUM_TOWERS];
+bool           towerIrrCheckEmailSent[NUM_TOWERS];
+bool           irrigationCompleteEmailSent = false;
+const unsigned long IRR_CHECK_DELAY_MS = 120000UL;  // 2 minutes to check if trays are moving
+const unsigned long IRR_SAFETY_CHECK_MS = 180000UL; // 3 minutes for safety check (tray stuck at 0)
 
 // Outage tracking for Cloud
 bool          wasCloudConnected = false;
@@ -770,9 +923,17 @@ void onIrrigationEnableChange() {
   // When irrigation transitions from OFF → ON,
   // start a fresh count of valve opens per tower.
   if (!wasEnabled && irrigationEnabledInternal) {
+    irrigationWasJustStarted = true;
+    irrigationStartMs = millis();
+    irrigationCompleteEmailSent = false;
+
     for (uint8_t i = 0; i < NUM_TOWERS; ++i) {
       towerIrrCount[i] = 0;
+      towerTrayCountAtStart[i] = towerTrayCount[i];
+      towerIrrCheckEmailSent[i] = false;
     }
+
+    Serial.println(F("[IRRIGATION] Started - monitoring tray counts"));
   }
 
   // OPTION 2 (if you find it reversed in practice):
@@ -1213,7 +1374,14 @@ void setup() {
   for (uint8_t i = 0; i < NUM_TOWERS; i++) {
     towerTrayCount[i] = 0;
     towerIrrCount[i]  = 0;
+    towerTrayCountAtStart[i] = 0;
+    towerIrrCheckEmailSent[i] = false;
   }
+
+  // Initialize irrigation monitoring state
+  irrigationWasJustStarted = false;
+  irrigationStartMs = 0;
+  irrigationCompleteEmailSent = false;
 
   // Set default tower interval from fixed 18 Hz (overwritten later by VFD feedback)
   {
@@ -1477,6 +1645,10 @@ else                           ignoreUntilMs[ch] = nowMs + IGNORE_MS;
       }
     }
   }
+
+  // Monitor irrigation progress and handle completion
+  monitorIrrigationProgress(nowMs);
+  handleIrrigationCompletion(nowMs);
 
   // VFD polling
   pollVfdsIfDue(nowMs);
