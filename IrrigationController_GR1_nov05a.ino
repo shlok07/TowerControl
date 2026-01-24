@@ -200,6 +200,7 @@ unsigned int  towerIrrCount[NUM_TOWERS];
 const uint8_t MAX_VALVE_OPENS_PER_TOWER = 17;
 
 // Irrigation monitoring state (must be declared before functions that use them)
+bool           irrigationEnabledInternal = true;
 bool           irrigationWasJustStarted = false;
 unsigned long  irrigationStartMs        = 0;
 unsigned long  towerTrayCountAtStart[NUM_TOWERS];
@@ -795,8 +796,6 @@ unsigned long  prevTrigMsArr[NUM_CH];
 unsigned long  deltaSecArr[NUM_CH];
 
 bool           firedThisAssert[NUM_CH];
-// NEW: internal "real" enable flag
-bool           irrigationEnabledInternal = true;
 
 // Outage tracking for Cloud
 bool          wasCloudConnected = false;
