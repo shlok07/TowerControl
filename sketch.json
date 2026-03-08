@@ -1,0 +1,66 @@
+{
+  "cpu": {
+    "fqbn": "arduino:mbed_opta:opta",
+    "name": "",
+    "type": "serial"
+  },
+  "secrets": [
+    {
+      "name": "SECRET_FAULT_EMAIL_FROM_ADDR",
+      "value": ""
+    },
+    {
+      "name": "SECRET_FAULT_EMAIL_FROM_NAME",
+      "value": ""
+    },
+    {
+      "name": "SECRET_FAULT_EMAIL_RECIPIENT_1_ADDR",
+      "value": ""
+    },
+    {
+      "name": "SECRET_FAULT_EMAIL_RECIPIENT_1_NAME",
+      "value": ""
+    },
+    {
+      "name": "SECRET_FAULT_EMAIL_RECIPIENT_2_ADDR",
+      "value": ""
+    },
+    {
+      "name": "SECRET_FAULT_EMAIL_RECIPIENT_2_NAME",
+      "value": ""
+    },
+    {
+      "name": "SECRET_OPTIONAL_DNS",
+      "value": ""
+    },
+    {
+      "name": "SECRET_OPTIONAL_GATEWAY",
+      "value": ""
+    },
+    {
+      "name": "SECRET_OPTIONAL_IP",
+      "value": ""
+    },
+    {
+      "name": "SECRET_OPTIONAL_NETMASK",
+      "value": ""
+    },
+    {
+      "name": "SECRET_SMTP_PASSWORD",
+      "value": ""
+    },
+    {
+      "name": "SECRET_SMTP_PORT",
+      "value": ""
+    },
+    {
+      "name": "SECRET_SMTP_SERVER",
+      "value": ""
+    },
+    {
+      "name": "SECRET_SMTP_USERNAME",
+      "value": ""
+    }
+  ],
+  "included_libs": []
+}
