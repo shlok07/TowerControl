@@ -35,6 +35,16 @@
 //  NOTE: Manual warns "Many bus masters address the first register as
 //        register 0" — this code uses 0-based addresses throughout.
 //
+//  [FIX-15] INTERMITTENT ROTATION MODE:
+//           - Cloud toggle: intermittentMode (bool, R/W)
+//           - When ON: 15 min running → 30 min rest → repeat
+//           - VFDs ramp down via P-24 decel, ramp up via P-03 accel
+//             so towers start/stop smoothly (no mechanical jerk)
+//           - Fault detection suppressed during OFF phase and for a
+//             60-second grace period after each restart
+//           - Toggling intermittentMode OFF during rest phase
+//             immediately resumes VFDs
+//
 //  PRIOR CHANGELOG (v1→v2):
 //  [FIX-1]  False faults after leaving bypass.
 //  [FIX-2]  Proper debounce.
@@ -359,6 +369,25 @@ struct VfdGroup {
 };
 
 static VfdGroup vfdGroups[NUM_VFD_GROUPS];
+
+// ======================================================================
+// [FIX-15] INTERMITTENT ROTATION MODE
+// When enabled: towers run for INTERMITTENT_ON_MS, then rest for
+// INTERMITTENT_OFF_MS, repeating indefinitely.  VFDs ramp down/up
+// using their P-03/P-24 ramp settings, avoiding mechanical shock.
+// Fault detection is suppressed during the OFF phase and for a grace
+// period after restart so stale rolling averages don't trip faults.
+// ======================================================================
+
+static const unsigned long INTERMITTENT_ON_MS  = 15UL * 60UL * 1000UL;  // 15 min
+static const unsigned long INTERMITTENT_OFF_MS = 30UL * 60UL * 1000UL;  // 30 min
+
+// Grace period after VFDs restart — lets towers reach speed and accumulate
+// a few trays before fault detection re-arms.
+static const unsigned long INTERMITTENT_RESTART_GRACE_MS = 60000UL;  // 60 s
+
+static bool  intermittentPhaseOn     = true;   // true = running, false = resting
+static unsigned long intermittentPhaseStartMs = 0;
 
 // Forward declarations
 static bool  vfdWriteCommand(uint8_t slaveId, bool run, float speedHz);
@@ -709,6 +738,20 @@ static void resetTowerLearningState(uint8_t tIdx, unsigned long now) {
   towerTrayCount[tIdx]     = 0;
 }
 
+// [FIX-15] Lightweight reset: re-arms fault detection (learning counter,
+// edge times, interval history) WITHOUT clearing daily tray counts or
+// irrigation counts.  Used by intermittent mode restarts.
+static void resetTowerFaultDetection(uint8_t tIdx, unsigned long now) {
+  Tower &t = towers[tIdx];
+  t.lastEdgeMs         = 0;
+  t.prevEdgeMs         = 0;
+  t.lastIntervalMs     = 0;
+  t.traysSinceActive   = 0;
+  t.inhibitUntilMs     = now + CHANGE_INHIBIT_MS;
+  clearIntervalHistory(tIdx);
+  // NOTE: towerTrayCount and towerIrrCount intentionally preserved
+}
+
 void ackFault(uint8_t tIdx) {
   if (tIdx >= NUM_TOWERS) return;
   Tower &t = towers[tIdx];
@@ -817,6 +860,10 @@ void readReedAndUpdate(uint8_t i, unsigned long now) {
   }
 
   // ---- FAULT DETECTION ---- [FIX-13 hardened]
+  // [FIX-15] Skip fault detection during intermittent OFF phase —
+  // VFDs are stopped so no trays will arrive.
+  if (intermittentMode && !intermittentPhaseOn) return;
+
   if (!t.contactorOn || t.fault || t.bypassLine || now <= t.inhibitUntilMs)
     return;
 
@@ -1459,6 +1506,92 @@ void onVfd2RunCmdChange() {
 }
 void onVfd2AlarmCodeChange() {}
 
+// ---- [FIX-15] Intermittent mode cloud callback ----
+
+void onIntermittentModeChange() {
+  Serial.print(F("[INTERMITTENT] Mode "));
+  Serial.println(intermittentMode ? "ENABLED" : "DISABLED");
+
+  unsigned long nowMs = millis();
+
+  if (intermittentMode) {
+    // Start in the ON phase — towers begin running immediately
+    intermittentPhaseOn      = true;
+    intermittentPhaseStartMs = nowMs;
+  } else {
+    // Switching back to continuous — if VFDs were stopped during an OFF
+    // phase, restart them now so towers resume normally.
+    if (!intermittentPhaseOn) {
+      Serial.println(F("[INTERMITTENT] Resuming VFDs (mode disabled during OFF phase)"));
+      for (uint8_t g = 0; g < NUM_VFD_GROUPS; ++g) {
+        VfdGroup &vg = vfdGroups[g];
+        if (vg.state == VGS_RUNNING && vg.runCmd) {
+          vfdWriteCommand(vg.slaveId, true, vg.speedSetHz);
+        }
+      }
+      // Re-arm fault detection without clearing daily tray counts
+      for (uint8_t i = 0; i < NUM_TOWERS; ++i) {
+        resetTowerFaultDetection(i, nowMs);
+        towers[i].inhibitUntilMs = nowMs + INTERMITTENT_RESTART_GRACE_MS;
+      }
+    }
+    intermittentPhaseOn = true;
+  }
+}
+
+// Helper: stop both VFD groups (ramps down via P-24 decel)
+static void intermittentStopVfds(unsigned long nowMs) {
+  Serial.println(F("[INTERMITTENT] OFF phase — stopping VFDs"));
+  for (uint8_t g = 0; g < NUM_VFD_GROUPS; ++g) {
+    VfdGroup &vg = vfdGroups[g];
+    if (vg.state == VGS_RUNNING) {
+      bool ok = vfdWriteCommand(vg.slaveId, false, vg.speedSetHz);
+      vg.commFault = !ok;
+      // Note: we keep vg.runCmd unchanged so we know to restart later
+    }
+  }
+}
+
+// Helper: restart both VFD groups (ramps up via P-03 accel)
+static void intermittentStartVfds(unsigned long nowMs) {
+  Serial.println(F("[INTERMITTENT] ON phase — starting VFDs"));
+  for (uint8_t g = 0; g < NUM_VFD_GROUPS; ++g) {
+    VfdGroup &vg = vfdGroups[g];
+    if (vg.state == VGS_RUNNING && vg.runCmd) {
+      bool ok = vfdWriteCommand(vg.slaveId, true, vg.speedSetHz);
+      vg.commFault = !ok;
+    }
+  }
+  // Re-arm fault detection without clearing daily tray counts
+  for (uint8_t i = 0; i < NUM_TOWERS; ++i) {
+    resetTowerFaultDetection(i, nowMs);
+    towers[i].inhibitUntilMs = nowMs + INTERMITTENT_RESTART_GRACE_MS;
+  }
+}
+
+// Called from loop(): manages the ON/OFF phase transitions
+static void processIntermittentMode(unsigned long nowMs) {
+  if (!intermittentMode) return;
+
+  unsigned long elapsed = nowMs - intermittentPhaseStartMs;
+
+  if (intermittentPhaseOn) {
+    // Currently in ON phase — check if it's time to rest
+    if (elapsed >= INTERMITTENT_ON_MS) {
+      intermittentPhaseOn      = false;
+      intermittentPhaseStartMs = nowMs;
+      intermittentStopVfds(nowMs);
+    }
+  } else {
+    // Currently in OFF phase — check if it's time to run again
+    if (elapsed >= INTERMITTENT_OFF_MS) {
+      intermittentPhaseOn      = true;
+      intermittentPhaseStartMs = nowMs;
+      intermittentStartVfds(nowMs);
+    }
+  }
+}
+
 // ---- [FIX-12] Cloud callbacks for acceleration time (R/W) ----
 
 void onVfd1AccelTimeSecChange() {
@@ -1637,6 +1770,7 @@ void setup() {
   tower0Running=tower1Running=tower2Running=tower3Running=
   tower4Running=tower5Running=tower6Running=tower7Running=false;
   vfd1CommFault=vfd2CommFault=false; vfd1RunCmd=vfd2RunCmd=false;
+  intermittentMode=false;
   tower0TrayCount=tower1TrayCount=tower2TrayCount=tower3TrayCount=
   tower4TrayCount=tower5TrayCount=tower6TrayCount=tower7TrayCount=0;
 
@@ -1794,6 +1928,11 @@ void setup() {
   Serial.print(F("Extended VFD poll: ")); Serial.print(VFD_EXT_POLL_INTERVAL_MS);
   Serial.println(F(" ms"));
   Serial.println(F("[FIX-14] Per-tower irrigation (default: all OFF)."));
+  Serial.print(F("[FIX-15] Intermittent mode: OFF ("));
+  Serial.print(INTERMITTENT_ON_MS / 60000UL);
+  Serial.print(F(" min ON / "));
+  Serial.print(INTERMITTENT_OFF_MS / 60000UL);
+  Serial.println(F(" min OFF when enabled)."));
 }
 
 void loop() {
@@ -1864,6 +2003,9 @@ void loop() {
     if (towers[i].desiredContactorOn != desiredOn)
       setContactor(i, desiredOn);
   }
+
+  // [FIX-15] Intermittent rotation cycle (before VFD state machine)
+  processIntermittentMode(nowMs);
 
   // Process VFD group state machines
   for (uint8_t g = 0; g < NUM_VFD_GROUPS; ++g)

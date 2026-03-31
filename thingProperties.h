@@ -3,6 +3,7 @@
 #include <Arduino_NetworkConfigurator.h>
 #include <configuratorAgents/agents/BLEAgent.h>
 #include <configuratorAgents/agents/SerialAgent.h>
+void onIntermittentModeChange();
 void onVfd1AccelTimeSecChange();
 void onVfd1SpeedSetHzChange();
 void onVfd2AccelTimeSecChange();
@@ -151,6 +152,7 @@ bool tower7Bypass;
 bool tower7Fault;
 bool tower7IrrEnable;
 bool tower7Running;
+bool intermittentMode;
 bool vfd1CommFault;
 bool vfd1RunCmd;
 bool vfd2CommFault;
@@ -293,6 +295,7 @@ void initProperties(){
   ArduinoCloud.addProperty(tower7Fault, READ, ON_CHANGE, NULL);
   ArduinoCloud.addProperty(tower7IrrEnable, READWRITE, ON_CHANGE, onTower7IrrEnableChange);
   ArduinoCloud.addProperty(tower7Running, READ, ON_CHANGE, NULL);
+  ArduinoCloud.addProperty(intermittentMode, READWRITE, ON_CHANGE, onIntermittentModeChange);
   ArduinoCloud.addProperty(vfd1CommFault, READ, ON_CHANGE, NULL);
   ArduinoCloud.addProperty(vfd1RunCmd, READWRITE, ON_CHANGE, onVfd1RunCmdChange);
   ArduinoCloud.addProperty(vfd2CommFault, READ, ON_CHANGE, NULL);
