@@ -35,6 +35,15 @@
 //  NOTE: Manual warns "Many bus masters address the first register as
 //        register 0" — this code uses 0-based addresses throughout.
 //
+//  [FIX-16] PER-TOWER ON/OFF SWITCHES:
+//           - Cloud toggles: tower0On .. tower7On (bool, R/W)
+//           - Default: all ON at boot
+//           - When OFF: contactor opens (via anti-slam), fault detection
+//             suppressed for that tower
+//           - When turned back ON: fault cleared, learning reset,
+//             contactor re-closes after inhibit period
+//           - Bypass overrides towerOn (bypass always wins)
+//
 //  [FIX-15] INTERMITTENT ROTATION MODE:
 //           - Cloud toggle: intermittentMode (bool, R/W)
 //           - When ON: 15 min running → 30 min rest → repeat
@@ -313,6 +322,11 @@ static const uint8_t  TRAYS_PER_TOWER       = 16;
 // [FIX-14] Per-tower irrigation enable flags (driven by cloud variables).
 // Default: false — each tower's irrigation must be explicitly enabled.
 static bool towerIrrEnabled[NUM_TOWERS];
+
+// [FIX-16] Per-tower ON/OFF switches (driven by cloud variables).
+// Default: true — all towers enabled at boot.  When OFF, contactor opens
+// and fault detection is suppressed for that tower.
+static bool towerOnEnabled[NUM_TOWERS];
 
 // ======================================================================
 // [FIX-11] VFD ANTI-SLAM STATE MACHINE
@@ -864,6 +878,9 @@ void readReedAndUpdate(uint8_t i, unsigned long now) {
   // VFDs are stopped so no trays will arrive.
   if (intermittentMode && !intermittentPhaseOn) return;
 
+  // [FIX-16] Skip fault detection for towers switched OFF
+  if (!towerOnEnabled[i]) return;
+
   if (!t.contactorOn || t.fault || t.bypassLine || now <= t.inhibitUntilMs)
     return;
 
@@ -1261,6 +1278,40 @@ void onTower4BypassChange() { applyBypass(4, tower4Bypass); }
 void onTower5BypassChange() { applyBypass(5, tower5Bypass); }
 void onTower6BypassChange() { applyBypass(6, tower6Bypass); }
 void onTower7BypassChange() { applyBypass(7, tower7Bypass); }
+
+// [FIX-16] Per-tower ON/OFF callbacks
+
+static void handleTowerOnChange(uint8_t tIdx, bool on) {
+  if (tIdx >= NUM_TOWERS) return;
+  towerOnEnabled[tIdx] = on;
+
+  Serial.print(F("[TOWER-ON] Tower "));
+  Serial.print(tIdx + 1);
+  Serial.println(on ? " ON" : " OFF");
+
+  if (on) {
+    // Turning tower back on — reset fault detection so it re-learns
+    // without false-tripping on the first slow tray.
+    towers[tIdx].fault = false;
+    resetTowerFaultDetection(tIdx, millis());
+    towers[tIdx].inhibitUntilMs = millis() + CHANGE_INHIBIT_MS;
+  } else {
+    // Turning tower off — open the contactor (via anti-slam)
+    if (!towers[tIdx].bypassLine) {
+      towers[tIdx].desiredContactorOn = false;
+      requestContactorChange(tIdx, false);
+    }
+  }
+}
+
+void onTower0OnChange() { handleTowerOnChange(0, tower0On); }
+void onTower1OnChange() { handleTowerOnChange(1, tower1On); }
+void onTower2OnChange() { handleTowerOnChange(2, tower2On); }
+void onTower3OnChange() { handleTowerOnChange(3, tower3On); }
+void onTower4OnChange() { handleTowerOnChange(4, tower4On); }
+void onTower5OnChange() { handleTowerOnChange(5, tower5On); }
+void onTower6OnChange() { handleTowerOnChange(6, tower6On); }
+void onTower7OnChange() { handleTowerOnChange(7, tower7On); }
 
 // ======================================================================
 // SECTION 4: VFD MODBUS/RS485  (SEW MOVITRAC LTE-B+)
@@ -1754,6 +1805,11 @@ void setup() {
   tower6IrrEnable=false; tower7IrrEnable=false;
   for (uint8_t i = 0; i < NUM_TOWERS; ++i) towerIrrEnabled[i] = false;
 
+  // [FIX-16] Per-tower ON/OFF defaults: all ON
+  tower0On=tower1On=tower2On=tower3On=
+  tower4On=tower5On=tower6On=tower7On=true;
+  for (uint8_t i = 0; i < NUM_TOWERS; ++i) towerOnEnabled[i] = true;
+
   tower0LastEdgeMin=tower0LastIntervalMin=tower1LastEdgeMin=tower1LastIntervalMin=
   tower2LastEdgeMin=tower2LastIntervalMin=tower3LastEdgeMin=tower3LastIntervalMin=
   tower4LastEdgeMin=tower4LastIntervalMin=tower5LastEdgeMin=tower5LastIntervalMin=
@@ -1933,6 +1989,7 @@ void setup() {
   Serial.print(F(" min ON / "));
   Serial.print(INTERMITTENT_OFF_MS / 60000UL);
   Serial.println(F(" min OFF when enabled)."));
+  Serial.println(F("[FIX-16] Per-tower ON/OFF switches (default: all ON)."));
 }
 
 void loop() {
@@ -1997,9 +2054,10 @@ void loop() {
   }
 
   // Tower run control
+  // [FIX-16] towerOnEnabled must be true for tower to run
   for (uint8_t i = 0; i < NUM_TOWERS; ++i) {
     if (towers[i].bypassLine) continue;
-    bool desiredOn = !towers[i].fault;
+    bool desiredOn = towerOnEnabled[i] && !towers[i].fault;
     if (towers[i].desiredContactorOn != desiredOn)
       setContactor(i, desiredOn);
   }
