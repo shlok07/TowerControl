@@ -1839,6 +1839,7 @@ void setup() {
 
   initProperties();
   ArduinoCloud.begin(ArduinoIoTPreferredConnection);
+  ArduinoCloud.setOTAChunkMode();
 
   PULSE_ON_MS = (unsigned long)pulseSeconds * 1000UL;
   lastDayIndex = dayIndexNow();
