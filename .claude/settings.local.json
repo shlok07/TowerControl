@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh repo view shlok07/TowerControl --json description,createdAt,pushedAt)",
+      "Bash(ls *.ino)"
+    ]
+  }
+}
